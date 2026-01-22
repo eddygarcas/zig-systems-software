@@ -29,6 +29,7 @@ pub const BumpAllocator = struct {
         _ = ret_addr;
         _ = ptr_align; // existing buf already satisfies its alignment
 
+        // @ptrCast is not enough the compoler has to align cast the anyopaque pointer to ensure the aligment so the right memory is mapped.
         const self: *BumpAllocator = @ptrCast(@alignCast(ctx));
 
         const base = @intFromPtr(self.buffer.ptr);
@@ -89,6 +90,8 @@ pub const BumpAllocator = struct {
                 .monotonic,
                 .monotonic,
             ) orelse {
+                std.debug.print("exchanged base address {any} offset {d}\n", .{ self.buffer.ptr, aligned_start });
+                // aligned_start the number of bytes from the beginning of the buffer where this allocation starts.
                 return self.buffer.ptr + aligned_start;
             };
             current = exchanged;
@@ -135,6 +138,7 @@ pub fn main() !void {
 
     const a = try alloc.alloc(u64, 1_000_000);
     _ = a;
+    _ = try alloc.alloc(u64, 1_000);
 
     bump.reset();
 }
