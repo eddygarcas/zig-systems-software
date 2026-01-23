@@ -74,6 +74,7 @@ pub const BumpAllocator = struct {
         ptr_align: std.mem.Alignment,
         ret_addr: usize,
     ) ?[*]u8 {
+        //ret_addr is mainly for debugging/leak tracking (you ignore it, which is fine for a custom allocator).
         _ = ret_addr;
         const self: *BumpAllocator = @ptrCast(@alignCast(ctx));
 
