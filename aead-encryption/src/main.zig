@@ -35,11 +35,14 @@ const Pbkdf2Iters: u32 = 200_000;
 
 /// Fixed-size header written at the start of every encrypted file.
 /// Contains all the metadata needed to derive the key and decrypt the chunks.
+/// Do not use packed strct with arrays
 const Header = struct {
     /// Magic bytes for format identification.
     magic: [8](u8),
     /// Format version number.
     version: u8,
+
+    _pad: [3]u8 = [_]u8{0} ** 3, // explicit zero-filled padding
     /// Plaintext chunk size used during encryption.
     chunk_size: u32,
     /// Random salt for PBKDF2 key derivation.
@@ -68,6 +71,7 @@ pub fn main() !void {
 
     if (args.len < 2) return usage();
 
+    std.debug.print("Header size: {}\n", .{@sizeOf(Header)});
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const a = args[i];
