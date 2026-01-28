@@ -201,13 +201,22 @@ fn deriveKey(out_key: *[KeyLen]u8, password: []const u8, salt: *[SaltLen]u8) !vo
 
 /// Decrypts a file previously encrypted by `encryptFile`.
 ///
-/// Reads the header, re-derives the key from the password and stored salt,
-/// then processes each chunk by verifying its tag and decrypting.
+/// 1. Reads and validates the `Header` from `in_path` (magic bytes and version).
+/// 2. Re-derives the 256-bit key from `password` via PBKDF2-HMAC-SHA256 using
+///    the salt stored in the header.
+/// 3. Processes each chunk sequentially:
+///    - Reads the 4-byte little-endian ciphertext length.
+///    - Reads the ciphertext and 16-byte Poly1305 authentication tag.
+///    - Computes the per-chunk nonce from the base nonce and counter.
+///    - Verifies the tag and decrypts (AD = little-endian counter).
+///    - Writes the plaintext to `out_path`.
 ///
-/// **Not yet implemented.**
-fn decryptFile(alloctor: std.mem.Allocator, in_path: []const u8, out_path: []const u8, password: []const u8) !void {
-    _ = password;
-
+/// Returns `error.UnsupportedFormat` if the magic bytes or version mismatch.
+/// Returns `error.CorruptLenght` if a chunk length exceeds the header's chunk size.
+/// Returns `error.Truncated` if the file ends mid-chunk.
+/// Decryption fails with `error.AuthenticationFailed` if any tag is invalid
+/// (wrong password, corrupted data, or tampered ciphertext).
+fn decryptFile(allocator: std.mem.Allocator, in_path: []const u8, out_path: []const u8, password: []const u8) !void {
     const in_file = try std.fs.cwd().openFile(in_path, .{ .mode = .read_only });
     defer in_file.close();
 
@@ -216,6 +225,75 @@ fn decryptFile(alloctor: std.mem.Allocator, in_path: []const u8, out_path: []con
 
     var header: Header = undefined;
     const header_bytes: []u8 = std.mem.asBytes(&header);
+    const size = try in_file.readAll(header_bytes);
+    if (size != header_bytes.len) return error.BadHeader;
+
+    std.debug.print("Data to decrypt:\n {s} \n Password: {s} \n", .{
+        header_bytes,
+        password,
+    });
+
+    if (!std.mem.eql(u8, &header.magic, MAGIC) or header.version != VERSION) {
+        return error.UnsupportedFormat;
+    }
+
+    var key: [KeyLen]u8 = undefined;
+    try deriveKey(&key, password, &header.salt);
+
+    var in_buf = try allocator.alloc(u8, header.chunk_size);
+    defer allocator.free(in_buf);
+
+    var out_buf = try allocator.alloc(u8, header.chunk_size);
+    defer allocator.free(out_buf);
+
+    //const reader = in_file.reader(in_buf);
+    //const writer = out_file.writer(&out_buf);
+
+    var counter: u32 = 0;
+
+    while (true) {
+        var len_bytes: [4]u8 = undefined;
+        const len_read = in_file.read(&len_bytes) catch |err| switch (err) {
+            //error.EndOfStream => 0,
+            else => return err,
+        };
+        if (len_read == 0) break;
+        if (len_read != 4) break;
+
+        const ct_len = std.mem.readInt(u32, &len_bytes, .little);
+        if (ct_len > header.chunk_size) return error.CorruptLenght;
+
+        const n_ct = try in_file.read(in_buf[0..ct_len]);
+        if (n_ct != ct_len) return error.Truncated;
+
+        var tag: [TagLen]u8 = undefined;
+        const n_tag = try in_file.read(&tag);
+        if (n_tag != TagLen) return error.Truncated;
+
+        const nonce = makeNonce(&header.base_nonce, counter);
+
+        var ad: [4]u8 = undefined;
+        std.mem.writeInt(u32, &ad, counter, .little);
+
+        std.debug.print("Decrypt:\n Tag: {s}\n AD: {any} \n Nonce: {s} \n key: {s}\n", .{
+            tag,
+            ad,
+            nonce,
+            key,
+        });
+        try std.crypto.aead.chacha_poly.ChaCha20Poly1305.decrypt(
+            out_buf[0..ct_len],
+            in_buf[0..ct_len],
+            tag,
+            &ad,
+            nonce,
+            key,
+        );
+
+        try out_file.writeAll(out_buf[0..ct_len]);
+
+        counter += 1;
+    }
 }
 
 /// Prints CLI usage information to stderr and returns `error.InvalidArgs`.
