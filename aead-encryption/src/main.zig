@@ -108,8 +108,19 @@ pub fn main() !void {
     const pw = password orelse return usage();
 
     switch (mode) {
-        .encrypt => try encryptFile(allocator, in_p, out_p, pw, chunk_size),
-        .decrypt => try decryptFile(allocator, in_p, out_p, pw),
+        .encrypt => try encryptFile(
+            allocator,
+            in_p,
+            out_p,
+            pw,
+            chunk_size,
+        ),
+        .decrypt => try decryptFile(
+            allocator,
+            in_p,
+            out_p,
+            pw,
+        ),
     }
     std.debug.print("\x1b[32mDone!\x1b[0m", .{});
 }
@@ -294,7 +305,7 @@ fn usage() void {
     std.debug.print(
         \\Usage:
         \\  zig build-exe aead-crypt.zig
-        \\  ./aead-crypt --encrypt -i <input> -o <output> -p <password> [--chunk 65536]
+        \\  ./aead-crypt --encrypt -i <input> -o <output> -p <password> [--chunk-size 65536]
         \\  ./aead-crypt --decrypt -i <input> -o <output> -p <password>
         \\
         \\Format:
