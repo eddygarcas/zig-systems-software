@@ -71,7 +71,6 @@ pub fn main() !void {
 
     if (args.len < 2) return usage();
 
-    std.debug.print("Header size: {}\n", .{@sizeOf(Header)});
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const a = args[i];
@@ -112,6 +111,7 @@ pub fn main() !void {
         .encrypt => try encryptFile(allocator, in_p, out_p, pw, chunk_size),
         .decrypt => try decryptFile(allocator, in_p, out_p, pw),
     }
+    std.debug.print("\x1b[32mDone!\x1b[0m", .{});
 }
 
 /// Encrypts a file using ChaCha20-Poly1305 AEAD.
@@ -232,11 +232,6 @@ fn decryptFile(allocator: std.mem.Allocator, in_path: []const u8, out_path: []co
     const size = try in_file.readAll(header_bytes);
     if (size != header_bytes.len) return error.BadHeader;
 
-    std.debug.print("Data to decrypt:\n {s} \n Password: {s} \n", .{
-        header_bytes,
-        password,
-    });
-
     if (!std.mem.eql(u8, &header.magic, MAGIC) or header.version != VERSION) {
         return error.UnsupportedFormat;
     }
@@ -279,12 +274,6 @@ fn decryptFile(allocator: std.mem.Allocator, in_path: []const u8, out_path: []co
         var ad: [4]u8 = undefined;
         std.mem.writeInt(u32, &ad, counter, .little);
 
-        std.debug.print("Decrypt:\n Tag: {s}\n AD: {any} \n Nonce: {s} \n key: {s}\n", .{
-            tag,
-            ad,
-            nonce,
-            key,
-        });
         try std.crypto.aead.chacha_poly.ChaCha20Poly1305.decrypt(
             out_buf[0..ct_len],
             in_buf[0..ct_len],
@@ -304,9 +293,9 @@ fn decryptFile(allocator: std.mem.Allocator, in_path: []const u8, out_path: []co
 fn usage() void {
     std.debug.print(
         \\Usage:
-        \\  zig build-exe aead_filecrypt.zig
-        \\  ./aead_filecrypt --encrypt -i <input> -o <output> -p <password> [--chunk 65536]
-        \\  ./aead_filecrypt --decrypt -i <input> -o <output> -p <password>
+        \\  zig build-exe aead-crypt.zig
+        \\  ./aead-crypt --encrypt -i <input> -o <output> -p <password> [--chunk 65536]
+        \\  ./aead-crypt --decrypt -i <input> -o <output> -p <password>
         \\
         \\Format:
         \\  Header (magic+version+chunk_size+salt+base_nonce)
