@@ -416,7 +416,7 @@ test "parse TOON hikes example" {
     ;
 
     const result = try ToonParser(HikesData).parse(allocator, input);
-    std.debug.print("TOON parse : {any}", .{result});
+    std.debug.print("TOON parse:\n {any}\n", .{result});
 
     try std.testing.expectEqualStrings("Our favorite hikes together", result.context.task);
     try std.testing.expectEqualStrings("Boulder", result.context.location);
