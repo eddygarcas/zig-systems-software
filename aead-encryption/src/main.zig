@@ -36,7 +36,7 @@ const Pbkdf2Iters: u32 = 200_000;
 /// Fixed-size header written at the start of every encrypted file.
 /// Contains all the metadata needed to derive the key and decrypt the chunks.
 /// Do not use packed strct with arrays
-const Header = struct {
+const Header = extern struct {
     /// Magic bytes for format identification.
     magic: [8](u8),
     /// Format version number.
@@ -52,16 +52,18 @@ const Header = struct {
 };
 
 /// Entry point. Parses CLI arguments and dispatches to `encryptFile` or `decryptFile`.
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer {
-        const leaked = gpa.deinit();
-        std.debug.assert(leaked == .ok);
-    }
+pub fn main(init: std.process.Init) !void {
+    //var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    //const allocator = gpa.allocator();
+    //defer {
+    //    const leaked = gpa.deinit();
+    //    std.debug.assert(leaked == .ok);
+    //}
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    //const args = try std.process.argsAlloc(allocator);
+    //defer std.process.argsFree(allocator, args);
+    const allocator = init.arena.allocator();
+    const args = try init.minimal.args.toSlice(allocator);
 
     var mode: enum { encrypt, decrypt } = undefined;
     var in_path: ?[]const u8 = null;
@@ -114,12 +116,14 @@ pub fn main() !void {
             out_p,
             pw,
             chunk_size,
+            init.io,
         ),
         .decrypt => try decryptFile(
             allocator,
             in_p,
             out_p,
             pw,
+            init.io,
         ),
     }
     std.debug.print("\x1b[32mDone!\x1b[0m", .{});
@@ -140,24 +144,28 @@ fn encryptFile(
     out_path: []const u8,
     password: []const u8,
     chunk_size: u32,
+    io: std.Io,
 ) !void {
-    var rng = std.crypto.random;
+    //var rng = std.crypto.random;
 
     var header: Header = undefined;
     header.magic = MAGIC.*;
     header.version = VERSION;
     header.chunk_size = chunk_size;
-    rng.bytes(&header.salt);
-    rng.bytes(&header.base_nonce);
+    //rng.bytes(&header.salt);
+    //rng.bytes(&header.base_nonce);
+
+    std.Io.random(io, &header.salt);
+    std.Io.random(io, &header.base_nonce);
 
     var key: [KeyLen]u8 = undefined;
     try deriveKey(&key, password, &header.salt);
 
-    const in_file = try std.fs.cwd().openFile(in_path, .{ .mode = .read_only });
-    defer in_file.close();
+    const in_file = try std.Io.Dir.cwd().openFile(io, in_path, .{ .mode = .read_only });
+    defer in_file.close(io);
 
-    const out_file = try std.fs.cwd().createFile(out_path, .{ .read = true });
-    defer out_file.close();
+    const out_file = try std.Io.Dir.cwd().createFile(io, out_path, .{ .read = true });
+    defer out_file.close(io);
 
     var in_buf = try allocator.alloc(u8, chunk_size);
     defer allocator.free(in_buf);
@@ -165,12 +173,21 @@ fn encryptFile(
     var out_buf = try allocator.alloc(u8, chunk_size);
     defer allocator.free(out_buf);
 
-    try out_file.writeAll(std.mem.asBytes(&header));
+    const writer_buffer = try allocator.alloc(u8, 4096); // Separate buffer for writer
+    defer allocator.free(writer_buffer);
+
+    var writer_inst = out_file.writer(io, writer_buffer); // Use separate buffer
+    const writer = &writer_inst.interface;
+    try writer.writeAll(std.mem.asBytes(&header));
+    //try writer.flush(); // Yes, flush after header too!
+
+    var reader_inst = in_file.reader(io, in_buf);
+    const reader = &reader_inst.interface;
 
     var counter: u32 = 0;
 
     while (true) {
-        const n = try in_file.read(in_buf);
+        const n = try reader.readSliceShort(in_buf);
         if (n == 0) break;
 
         const nonce = makeNonce(&header.base_nonce, counter);
@@ -191,12 +208,13 @@ fn encryptFile(
 
         var len_bytes: [4]u8 = undefined;
         std.mem.writeInt(u32, &len_bytes, @as(u32, @intCast(n)), .little);
-        try out_file.writeAll(&len_bytes);
-        try out_file.writeAll(out_buf[0..n]);
-        try out_file.writeAll(&tag);
+        try writer.writeAll(&len_bytes);
+        try writer.writeAll(out_buf[0..n]);
+        try writer.writeAll(&tag);
 
         counter += 1;
     }
+    try writer.flush();
 }
 
 /// Derives a per-chunk nonce by writing the little-endian `counter` into the
@@ -231,17 +249,37 @@ fn deriveKey(out_key: *[KeyLen]u8, password: []const u8, salt: *[SaltLen]u8) !vo
 /// Returns `error.Truncated` if the file ends mid-chunk.
 /// Decryption fails with `error.AuthenticationFailed` if any tag is invalid
 /// (wrong password, corrupted data, or tampered ciphertext).
-fn decryptFile(allocator: std.mem.Allocator, in_path: []const u8, out_path: []const u8, password: []const u8) !void {
-    const in_file = try std.fs.cwd().openFile(in_path, .{ .mode = .read_only });
-    defer in_file.close();
+fn decryptFile(
+    allocator: std.mem.Allocator,
+    in_path: []const u8,
+    out_path: []const u8,
+    password: []const u8,
+    io: std.Io,
+) !void {
+    const in_file = try std.Io.Dir.cwd().openFile(io, in_path, .{ .mode = .read_only });
+    defer in_file.close(io);
 
-    const out_file = try std.fs.cwd().createFile(out_path, .{ .read = true });
-    defer out_file.close();
+    const out_file = try std.Io.Dir.cwd().createFile(io, out_path, .{ .read = true });
+    defer out_file.close(io);
 
+    // Allocate buffer big enough for header AND chunks
+    const read_buffer = try allocator.alloc(u8, @max(@sizeOf(Header), 65536));
+    defer {
+        @memset(read_buffer, 0); // Zero sensitive data before freeing
+        allocator.free(read_buffer);
+    }
+
+    // Create ONE reader for the entire file
+    var reader_inst = in_file.reader(io, read_buffer);
+    const reader = &reader_inst.interface;
+
+    // Read header using the reader
     var header: Header = undefined;
-    const header_bytes: []u8 = std.mem.asBytes(&header);
-    const size = try in_file.readAll(header_bytes);
-    if (size != header_bytes.len) return error.BadHeader;
+    try reader.readSliceAll(std.mem.asBytes(&header));
+
+    if (!std.mem.eql(u8, &header.magic, MAGIC) or header.version != VERSION) {
+        return error.UnsupportedFormat;
+    }
 
     if (!std.mem.eql(u8, &header.magic, MAGIC) or header.version != VERSION) {
         return error.UnsupportedFormat;
@@ -256,14 +294,16 @@ fn decryptFile(allocator: std.mem.Allocator, in_path: []const u8, out_path: []co
     var out_buf = try allocator.alloc(u8, header.chunk_size);
     defer allocator.free(out_buf);
 
-    //const reader = in_file.reader(in_buf);
-    //const writer = out_file.writer(&out_buf);
+    const writer_buffer = try allocator.alloc(u8, 4096);
+    defer allocator.free(writer_buffer);
+    var writer_inst = out_file.writer(io, writer_buffer);
+    const writer = &writer_inst.interface;
 
     var counter: u32 = 0;
 
     while (true) {
         var len_bytes: [4]u8 = undefined;
-        const len_read = in_file.read(&len_bytes) catch |err| switch (err) {
+        const len_read = reader.readSliceShort(&len_bytes) catch |err| switch (err) {
             //error.EndOfStream => 0,
             else => return err,
         };
@@ -273,11 +313,12 @@ fn decryptFile(allocator: std.mem.Allocator, in_path: []const u8, out_path: []co
         const ct_len = std.mem.readInt(u32, &len_bytes, .little);
         if (ct_len > header.chunk_size) return error.CorruptLenght;
 
-        const n_ct = try in_file.read(in_buf[0..ct_len]);
+        //try reader.readSliceAll(in_buf[0..ct_len]);
+        const n_ct = try reader.readSliceShort(in_buf[0..ct_len]);
         if (n_ct != ct_len) return error.Truncated;
 
         var tag: [TagLen]u8 = undefined;
-        const n_tag = try in_file.read(&tag);
+        const n_tag = try reader.readSliceShort(&tag);
         if (n_tag != TagLen) return error.Truncated;
 
         const nonce = makeNonce(&header.base_nonce, counter);
@@ -294,10 +335,11 @@ fn decryptFile(allocator: std.mem.Allocator, in_path: []const u8, out_path: []co
             key,
         );
 
-        try out_file.writeAll(out_buf[0..ct_len]);
+        try writer.writeAll(out_buf[0..ct_len]);
 
         counter += 1;
     }
+    try writer.flush();
 }
 
 /// Prints CLI usage information to stderr and returns `error.InvalidArgs`.
@@ -321,4 +363,135 @@ fn usage() void {
         \\  - Uses ChaCha20-Poly1305 with per-chunk nonces derived from base_nonce + counter
         \\
     , .{});
+}
+
+test "encrypt and decrypt round-trip" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Create a test init with IO
+    //var init = std.process.Init;
+    const io = std.testing.io;
+
+    // Test data
+    const plaintext = "This is a secret message for testing encryption!";
+    const password = "test_password_123";
+    const test_file = "test_plain.txt";
+    const encrypted_file = "test_encrypted.bin";
+    const decrypted_file = "test_decrypted.txt";
+
+    // Cleanup any leftover files
+    std.Io.Dir.cwd().deleteFile(io, test_file) catch {};
+    std.Io.Dir.cwd().deleteFile(io, encrypted_file) catch {};
+    std.Io.Dir.cwd().deleteFile(io, decrypted_file) catch {};
+    defer {
+        std.Io.Dir.cwd().deleteFile(io, test_file) catch {};
+        std.Io.Dir.cwd().deleteFile(io, encrypted_file) catch {};
+        std.Io.Dir.cwd().deleteFile(io, decrypted_file) catch {};
+    }
+
+    // Write test plaintext
+    {
+        const file = try std.Io.Dir.cwd().createFile(io, test_file, .{});
+        defer file.close(io);
+
+        const writer_buffer = try allocator.alloc(u8, 4096);
+        defer allocator.free(writer_buffer);
+        var writer_inst = file.writer(io, writer_buffer);
+        const writer = &writer_inst.interface;
+
+        try writer.writeAll(plaintext);
+        try writer.flush();
+    }
+
+    // Encrypt
+    try encryptFile(
+        allocator,
+        test_file,
+        encrypted_file,
+        password,
+        1024, // Small chunk size for testing
+        io,
+    );
+
+    // Verify encrypted file exists and is different
+    {
+        const enc_file = try std.Io.Dir.cwd().openFile(io, encrypted_file, .{});
+        defer enc_file.close(io);
+        const stat = try enc_file.stat(io);
+
+        try testing.expect(stat.size > @sizeOf(Header)); // At least header + some data
+    }
+
+    // Decrypt
+    try decryptFile(
+        allocator,
+        encrypted_file,
+        decrypted_file,
+        password,
+        io,
+    );
+
+    // Verify decrypted matches original
+    {
+        const dec_file = try std.Io.Dir.cwd().openFile(io, decrypted_file, .{});
+        defer dec_file.close(io);
+        const read_buffer = try allocator.alloc(u8, plaintext.len);
+        defer allocator.free(read_buffer);
+        var reader_inst = dec_file.reader(io, read_buffer);
+        const reader = &reader_inst.interface;
+        try reader.readSliceAll(read_buffer);
+        try testing.expectEqualStrings(plaintext, read_buffer);
+    }
+}
+
+test "decrypt with wrong password fails" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    //var init = std.process.init;
+    const io = std.testing.io;
+
+    const plaintext = "Secret data";
+    const correct_password = "correct123";
+    const wrong_password = "wrong456";
+    const test_file = "test_pw_plain.txt";
+    const encrypted_file = "test_pw_encrypted.bin";
+    const decrypted_file = "test_pw_decrypted.txt";
+
+    defer {
+        std.Io.Dir.cwd().deleteFile(io, test_file) catch {};
+        std.Io.Dir.cwd().deleteFile(io, encrypted_file) catch {};
+        std.Io.Dir.cwd().deleteFile(io, decrypted_file) catch {};
+    }
+
+    // Create and encrypt
+    {
+        const file = try std.Io.Dir.cwd().createFile(io, test_file, .{});
+        defer file.close(io);
+
+        const writer_buffer = try allocator.alloc(u8, 4096);
+        defer allocator.free(writer_buffer);
+        var writer_inst = file.writer(io, writer_buffer);
+        const writer = &writer_inst.interface;
+
+        try writer.writeAll(plaintext);
+        try writer.flush();
+    }
+    try encryptFile(
+        allocator,
+        test_file,
+        encrypted_file,
+        correct_password,
+        1024,
+        io,
+    );
+
+    try testing.expectError(error.AuthenticationFailed, decryptFile(
+        allocator,
+        encrypted_file,
+        decrypted_file,
+        wrong_password,
+        io,
+    ));
 }
