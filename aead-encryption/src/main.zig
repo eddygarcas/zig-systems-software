@@ -173,15 +173,19 @@ fn encryptFile(
     var out_buf = try allocator.alloc(u8, chunk_size);
     defer allocator.free(out_buf);
 
-    const writer_buffer = try allocator.alloc(u8, 4096); // Separate buffer for writer
+    // FIXED: Separate buffer for reader (was missing!)
+    const reader_buffer = try allocator.alloc(u8, chunk_size);
+    defer allocator.free(reader_buffer);
+
+    const writer_buffer = try allocator.alloc(u8, 4096);
     defer allocator.free(writer_buffer);
 
-    var writer_inst = out_file.writer(io, writer_buffer); // Use separate buffer
+    var writer_inst = out_file.writer(io, writer_buffer);
     const writer = &writer_inst.interface;
     try writer.writeAll(std.mem.asBytes(&header));
-    //try writer.flush(); // Yes, flush after header too!
 
-    var reader_inst = in_file.reader(io, in_buf);
+    // FIXED: Use reader_buffer instead of in_buf
+    var reader_inst = in_file.reader(io, reader_buffer);
     const reader = &reader_inst.interface;
 
     var counter: u32 = 0;
