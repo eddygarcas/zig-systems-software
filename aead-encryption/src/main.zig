@@ -284,10 +284,6 @@ fn decryptFile(
         return error.UnsupportedFormat;
     }
 
-    if (!std.mem.eql(u8, &header.magic, MAGIC) or header.version != VERSION) {
-        return error.UnsupportedFormat;
-    }
-
     var key: [KeyLen]u8 = undefined;
     try deriveKey(&key, password, &header.salt);
 
