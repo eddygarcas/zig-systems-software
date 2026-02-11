@@ -173,7 +173,6 @@ fn encryptFile(
     var out_buf = try allocator.alloc(u8, chunk_size);
     defer allocator.free(out_buf);
 
-    // FIXED: Separate buffer for reader (was missing!)
     const reader_buffer = try allocator.alloc(u8, chunk_size);
     defer allocator.free(reader_buffer);
 
