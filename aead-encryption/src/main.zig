@@ -154,14 +154,10 @@ fn encryptFile(
     chunk_size: u32,
     io: std.Io,
 ) !void {
-    //var rng = std.crypto.random;
-
     var header: Header = undefined;
     header.magic = MAGIC.*;
     header.version = VERSION;
     header.chunk_size = chunk_size;
-    //rng.bytes(&header.salt);
-    //rng.bytes(&header.base_nonce);
 
     std.Io.random(io, &header.salt);
     std.Io.random(io, &header.base_nonce);
