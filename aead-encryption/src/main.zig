@@ -51,17 +51,29 @@ const Header = extern struct {
     base_nonce: [NonceLen]u8,
 };
 
-/// Entry point. Parses CLI arguments and dispatches to `encryptFile` or `decryptFile`.
-pub fn main(init: std.process.Init) !void {
-    //var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    //const allocator = gpa.allocator();
-    //defer {
-    //    const leaked = gpa.deinit();
-    //    std.debug.assert(leaked == .ok);
-    //}
+const Actions = enum {
+    encrypt,
+    decrypt,
+    input,
+    output,
+    password,
+    chunk_size,
+};
 
-    //const args = try std.process.argsAlloc(allocator);
-    //defer std.process.argsFree(allocator, args);
+// Use a StaticStringMap to handle command line args - thanks Bobvan
+const arg_map = std.StaticStringMap(Actions).initComptime(.{
+    .{ "--encrypt", .encrypt },
+    .{ "--decrypt", .decrypt },
+    .{ "-i", .input },
+    .{ "--in", .input },
+    .{ "-o", .output },
+    .{ "--out", .output },
+    .{ "-p", .password },
+    .{ "--password", .password },
+    .{ "--chunk-size", .chunk_size },
+});
+
+pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
 
@@ -75,33 +87,29 @@ pub fn main(init: std.process.Init) !void {
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
-        const a = args[i];
-
-        if (std.mem.eql(u8, a, "--encrypt")) {
-            mode = .encrypt;
-        } else if (std.mem.eql(u8, a, "--decrypt")) {
-            mode = .decrypt;
-        } else if (std.mem.eql(u8, a, "-i") or std.mem.eql(u8, a, "-in")) {
-            i += 1;
-            if (i >= args.len) return usage();
-            in_path = args[i];
-        } else if (std.mem.eql(u8, a, "-o") or std.mem.eql(u8, a, "--out")) {
-            i += 1;
-            if (i >= args.len) return usage();
-            out_path = args[i];
-        } else if (std.mem.eql(u8, a, "-p") or std.mem.eql(u8, a, "--password")) {
-            i += 1;
-            if (i >= args.len) return usage();
-            password = args[i];
-        } else if (std.mem.eql(u8, a, "--chunk-size")) {
-            i += 1;
-            if (i >= args.len) return usage();
-            chunk_size = try std.fmt.parseInt(u32, args[i], 10);
-            if (chunk_size == 0 or chunk_size > MaxChunkSide) {
-                return error.InvalidChunkSize;
-            }
-        } else {
-            return usage();
+        const action = arg_map.get(args[i]) orelse return usage();
+        switch (action) {
+            .encrypt => mode = .encrypt,
+            .decrypt => mode = .decrypt,
+            .input => {
+                i += 1;
+                in_path = args[i];
+            },
+            .output => {
+                i += 1;
+                out_path = args[i];
+            },
+            .password => {
+                i += 1;
+                password = args[i];
+            },
+            .chunk_size => {
+                i += 1;
+                chunk_size = try std.fmt.parseInt(u32, args[i], 10);
+                if (chunk_size == 0 or chunk_size > MaxChunkSide) {
+                    return error.InvalidChunkSize;
+                }
+            },
         }
     }
 
