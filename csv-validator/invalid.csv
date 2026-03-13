@@ -1,0 +1,4 @@
+name,email,age
+Alice,not-an-email,30
+Bob,bob@example.com,notanumber
+,carol@example.com,4

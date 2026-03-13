@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>CSV Validator</title>
+</head>
+<body>
+  <h2>CSV Validator</h2>
+  <input type="file" id="csvFile" accept=".csv" />
+  <pre id="output"></pre>
+
+  <script>
+
+    const schema = {
+      columns: [
+        { name: "name",  type: "string",  required: true },
+        { name: "email", type: "email",   required: true },
+        { name: "age",   type: "integer", required: true },
+      ]
+    };
+
+let wasmInstance = null;
+let CSV_OFFSET, SCHEMA_OFFSET, OUT_OFFSET, MAX_OUT;
+
+WebAssembly.instantiateStreaming(fetch("zig-out/bin/csv_validator.wasm")).then(result => {
+    wasmInstance = result.instance;
+    const heapBase = wasmInstance.exports.getHeapBase();
+    
+    // place all regions above heap base, aligned to 64kb
+    const align = 64 * 1024;
+    const base = Math.ceil(heapBase / align) * align;
+
+    CSV_OFFSET    = base;
+    SCHEMA_OFFSET = base + 512 * 1024;
+    OUT_OFFSET    = base + 1024 * 1024;
+    MAX_OUT       = 512 * 1024;
+
+    console.log("heap base:", heapBase);
+    console.log("CSV_OFFSET:", CSV_OFFSET);
+    console.log("SCHEMA_OFFSET:", SCHEMA_OFFSET);
+    console.log("OUT_OFFSET:", OUT_OFFSET);
+
+    document.getElementById("output").textContent = "WASM loaded.";
+});
+    document.getElementById("csvFile").addEventListener("change", async (e) => {
+      const file = e.target.files[0];
+      if (!file || !wasmInstance) return;
+
+      const csvBytes    = new Uint8Array(await file.arrayBuffer());
+      const schemaBytes = new TextEncoder().encode(JSON.stringify(schema));
+      const mem         = new Uint8Array(wasmInstance.exports.memory.buffer);
+
+      // write inputs into WASM memory
+      mem.set(csvBytes,    CSV_OFFSET);
+      mem.set(schemaBytes, SCHEMA_OFFSET);
+
+      // call validate
+      const outLen = wasmInstance.exports.validate(
+        CSV_OFFSET,    csvBytes.length,
+        SCHEMA_OFFSET, schemaBytes.length,
+        OUT_OFFSET,    MAX_OUT,
+      );
+
+      // read result back
+      const resultBytes = mem.slice(OUT_OFFSET, OUT_OFFSET + outLen);
+      const raw = new TextDecoder().decode(resultBytes);
+      console.log("outLen:", outLen);
+      console.log("raw:", raw);
+
+      const result = JSON.parse(raw);
+
+      document.getElementById("output").textContent = JSON.stringify(result, null, 2);
+    });
+  </script>
+</body>
+</html>
