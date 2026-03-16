@@ -82,7 +82,7 @@ pub fn validate(
                     };
                 },
                 .email => {
-                    if (std.mem.indexOf(u8, field, "@") == null) {
+                    if (!isValidEmail(field)) {
                         try errors.append(allocator, .{
                             .row = row_idx,
                             .column = col.name,
@@ -100,6 +100,17 @@ pub fn validate(
         .valid = err_slice.len == 0,
         .errors = err_slice,
     };
+}
+
+fn isValidEmail(field: []const u8) bool {
+    const at = std.mem.indexOf(u8, field, "@") orelse return false;
+    // must have chars before @
+    if (at == 0) return false;
+    // must have a dot after @
+    const domain = field[at + 1 ..];
+    if (domain.len < 3) return false;
+    if (std.mem.indexOf(u8, domain, ".") == null) return false;
+    return true;
 }
 
 test "valid csv" {
