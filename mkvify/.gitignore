@@ -1,0 +1,13 @@
+# Zig build artifacts
+.zig-cache/
+zig-out/
+zig-cache/          # pre-0.14 name, harmless to keep
+
+# mkvify output (default --outdir, plus common overrides)
+mkv/
+*.mkv
+
+# Editor / OS
+.zed/
+.DS_Store
+*.swp
