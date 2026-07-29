@@ -345,6 +345,7 @@ fn decryptFile(
     try writer.flush();
 }
 
+
 /// Prints CLI usage information to stderr and returns `error.InvalidArgs`.
 fn usage() void {
     std.debug.print(
